@@ -1,0 +1,21 @@
+# --- Rust (Engine) ---
+/engine/target/
+**/*.rs.bk
+
+# --- Python (Prototyping) ---
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# --- Node.js (GUI) ---
+/gui/node_modules/
+/gui/dist/
+/gui/build/
+/gui/.env
+npm-debug.log
+yarn-error.log
+
+# --- System Files ---
+.DS_Store
+Thumbs.db

@@ -15,27 +15,37 @@
 </head>
 <body>
     <div id="board-container">
-        <span id="eval-bar"></span>
+        <div style="background-color: black;">
+            <span style="background-color: white;" id="eval"></span>
+        </div>
         <div id="myBoard" style="width: 400px"></div>
-        <div id="selectors">
-            <select id="player-black" class="selector">
+        <div class="selectors">
+            <select onchange="onChangeSelector('black')" id="player-black" class="selector">
                 <option value="Player">Player</option>
                 <option value="Computer">Computer</option>
             </select>
-            <select id="player-white" class="selector">
+            <select onchange="onChangeSelector('white')" id="player-white" class="selector">
                 <option value="Player">Player</option>
                 <option value="Computer">Computer</option>
             </select>
         </div>
+        <div class="selectors">
+            <h6 id="depthTitle">Depth: 6</h6>
+            <input type="range" id="depth-slider" min="1" max="10" value="6" onchange="onDepthChange(this)">
+        </div>
     </div>
     
     <label>Status:</label>
-    <div id="status"></div>
+    <div id="status" style="display: block"></div>
     <label>FEN:</label>
     <div id="fen"></div>
     <label>PGN:</label>
     <div id="pgn"></div>
 
+    <textarea id="fenEnter"></textarea>
+    <textarea id="pgnEnter"></textarea>
+
+    <button type="button" onclick="changeBoard()" id="change-board">Change Board</button>
 
     <style>
         #board-container {
@@ -49,7 +59,7 @@
             margin-right: 10px;
             background: linear-gradient(to top, black 50%, white 50%);
         }
-        #selectors {
+        .selectors {
             margin-left: 10px;
             display: flex;
             flex-direction: column;
@@ -63,25 +73,45 @@
     </style>
 
     <script>
-        // NOTE: this example uses the chess.js library:
-        // https://github.com/jhlywa/chess.js
+        let board = null
+        let game = new Chess()
 
-        var board = null
-        var game = new Chess()
-        var $status = $('#status')
-        var $fen = $('#fen')
-        var $pgn = $('#pgn')
-        var whiteSquareGrey = '#a9a9a9'
-        var blackSquareGrey = '#696969'
+        let $status = $('#status')
+        let $fen = $('#fen')
+        let $pgn = $('#pgn')
+
+        let $depthSlider = $('#depth-slider')
+        let $evalBar = $('#eval')
+
+        let $fenEnter = $('#fenEnter')
+        let $pgnEnter = $('#pgnEnter')
+
+        let depth = 6
+
+        let whiteSquareGrey = '#a9a9a9'
+        let blackSquareGrey = '#696969'
+
+
+    
+        function changeBoard() {
+            if ($fenEnter.val() !== ""){
+                game.load($fenEnter.val())
+                board.position(game.fen())
+            } else if ($pgnEnter.val() !== "") {
+                game.load_pgn($pgnEnter.val())
+                board.position(game.fen())
+            }
+
+        }
 
         function removeGreySquares () {
             $('#myBoard .square-55d63').css('background', '')
         }
 
         function greySquare (square) {
-            var $square = $('#myBoard .square-' + square)
+            let $square = $('#myBoard .square-' + square)
 
-            var background = whiteSquareGrey
+            let background = whiteSquareGrey
             if ($square.hasClass('black-3c85d')) {
                 background = blackSquareGrey
             }
@@ -109,7 +139,7 @@
                 removeGreySquares()
 
                 // see if the move is legal
-                var move = game.move({
+                let move = game.move({
                     from: source,
                     to: target,
                     promotion: 'q' // NOTE: always promote to a queen for example simplicity
@@ -118,30 +148,11 @@
                 // illegal move
                 if (move === null) return 'snapback'
 
-
-                if ($('#player-black').val() === "Computer" && game.turn() === 'b' ||
-                    $('#player-white').val() === "Computer" && game.turn() === 'w'){
-                        fetch('/move', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({fen: game.fen(), move: move.san, color: game.turn(), depth: 5})
-                    }).then((response) => {
-                        return response.text()
-                    }).then((data) => {
-                        evaluation, best_move = data.split(' ')
-                        console.log("Best move: " + best_move + " Eval: " + evaluation)
-                        game.move(best_move)
-                        board.position(game.fen())
-                    })
-                    }
-
         }
 
         function onMouseoverSquare (square, piece) {
             // get list of possible moves for this square
-            var moves = game.moves({
+            let moves = game.moves({
                 square: square,
                 verbose: true
             })
@@ -153,7 +164,7 @@
             greySquare(square)
 
             // highlight the possible squares for this piece
-            for (var i = 0; i < moves.length; i++) {
+            for (let i = 0; i < moves.length; i++) {
                 greySquare(moves[i].to)
             }
             }
@@ -166,7 +177,69 @@
             board.position(game.fen())
         }
 
-        var config = {
+        function onChange (obj) {
+            $fen.html(game.fen())
+            $pgn.html(game.pgn())
+
+            if (game.game_over()) {
+                let result = game.in_checkmate() ? 'Checkmate' : 'Draw'
+                $status.html(`Game Over: <b>${result}</b>`)
+
+                return true;
+            }
+
+            if ($('#player-black').val() === "Computer" && game.turn() === 'b' ||
+                $('#player-white').val() === "Computer" && game.turn() === 'w'){
+                getComputerMove(game.fen(), game.turn(), depth)
+
+            }
+        }
+
+        function onChangeSelector (color) {
+            if (color === "black") {
+                if ($('#player-black').val() === "Computer") {
+                    if (game.turn() === 'b') {
+                        getComputerMove(game.fen(), game.turn(), 3)
+                    }
+                } else {
+                    
+                }
+            } else {
+                if ($('#player-white').val() === "Computer") {
+                    if (game.turn() === 'w') {
+                        getComputerMove(game.fen(), game.turn(), 3)
+                    }
+                } else {
+                    
+                }
+            }
+        }
+
+        function getComputerMove(fen, color, depth) {
+            fetch('/move', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({fen: fen, color: color, depth: depth})
+            }).then((response) => {
+                return response.json()
+            
+            }).then((data) => {
+                console.log(data)
+                console.log("Best move: " + data.move + " Eval: " + data.evaluation)
+                let move = game.move(data.move)
+                board.move(`${move.from}-${move.to}`)
+                $evalBar.style.height = data.evaluation.parseInt()
+            })
+        }
+
+        function onDepthChange(slider) {
+            document.getElementById('depthTitle').innerText = 'Depth: ' + slider.value
+            depth = parseInt(slider.value) 
+     }
+
+        let config = {
             draggable: true,
             position: 'start',
             pieceTheme:"assets/{piece}.png",
@@ -174,7 +247,8 @@
             onDrop: onDrop,
             onMouseoutSquare: onMouseoutSquare,
             onMouseoverSquare: onMouseoverSquare,
-            onSnapEnd: onSnapEnd
+            onSnapEnd: onSnapEnd,
+            onChange: onChange
         }
         board = Chessboard('myBoard', config)
     </script>

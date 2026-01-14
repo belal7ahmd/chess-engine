@@ -1,27 +1,44 @@
 const express = require('express');
 const fs = require('fs');
-const child_process = require('child_process');
+const { spawn } = require('child_process');
 
 const app = express();
 const PORT = process.env.PORT || 80;
 
 app.use(express.json());
 
-app.post("/move", (req, res) => {
-    let body = req.body;
-    console.log(body);
-    child_process.execSync(`python ../chess_engine.py find_best_move_eval ${body.fen} ${body.color} ${body.depth}`, (error, stdout, stderr) => {
-        if (error) {
-            console.error(`Error executing move: ${error}`);
-            res.status(500).send("Internal Server Error");
-            return;
-        }
-        console.log(stdout);
-        res.send(stdout);
-        return;
-    });
+let engineProcess = spawn("../rust/target/release/rust.exe");
+
+engineProcess.stdout.on('data', (data) => {
+    console.log(`Engine Response: ${data}`);
+});
+
+// Handle errors from the engine
+engineProcess.stderr.on('data', (data) => {
+    console.error(`Engine Error: ${data}`);
+});
+
+app.post("/move", async (req, res) => {
+  const { fen, color, depth } = req.body;
+  console.log({ fen, color, depth });
+  try {
+    engineProcess.stdin.write(JSON.stringify({command: "eval_move", fen: fen, color: color, depth: depth}) + "\n");
+
+    res.json(await new Promise((resolve, reject) => {
+      engineProcess.stdout.once('data', (data) => {
+        data = data.toString();
+        data = data.split(" ");
+        resolve({move: data[0], evaluation: data[1]});
+      })
+    }))
+
     res.end();
-})
+    
+  } catch (error) {
+   console.log("Error Writing to stdin:", error);
+    res.status(500).send(error.message);
+  }
+});
 
 app.all(/.*/,(request,response)=>{
   request.url = (request.url == "/") ? "/index.html":request.url
