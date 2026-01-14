@@ -7,7 +7,7 @@ const PORT = process.env.PORT || 80;
 
 app.use(express.json());
 
-let engineProcess = spawn("../rust/target/release/rust.exe");
+let engineProcess = spawn("../engine/target/release/engine.exe");
 
 engineProcess.stdout.on('data', (data) => {
     console.log(`Engine Response: ${data}`);
