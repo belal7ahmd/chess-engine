@@ -6,7 +6,7 @@ use serde::{Deserialize};
 #[derive(Deserialize)]
 struct Request{
     command: String,
-    fen: String,
+    moves: Vec<String>,
     color: String,
     depth: i8
 }
@@ -201,8 +201,14 @@ impl Engine {
         return evaluation;
     }
 
-    fn search(&mut self, board: &mut chess::Board, depth: i8, color: chess::Color, mut alpha: i32, mut beta: i32) -> (Option<chess::Move>, i32) {
-        let hash_key =  board.hash();
+    fn search(&mut self, board: &mut chess::Board, depth: i8, color: chess::Color, mut alpha: i32, mut beta: i32, history: &Vec<u64>, path: &mut Vec<u64>) -> (Option<chess::Move>, i32) {
+
+        let hash_key = board.hash();
+
+        if self.is_repetition(history, path, hash_key) {
+            return (None, 0);
+        }
+
         let entry = self.transposition_table.probe(hash_key, depth);
         if !entry.is_none() {
             let entry = entry.unwrap();
@@ -226,9 +232,7 @@ impl Engine {
         let tt_entry = self.transposition_table.probe(hash_key, 0); // Get entry even if depth is low
         let tt_move = tt_entry.map(|e| e.best_move);
 
-
         if depth <= 0 {
-            self.transposition_table.store(hash_key, depth, self.static_evaluate_board(board), TtFlags::EXACT, None);
             return (None, self.static_evaluate_board(board));
         }
 
@@ -257,14 +261,18 @@ impl Engine {
 
         let mut cutoff = false;
 
+        path.push(hash_key);
+
         if color == chess::Color::White {
             best_score = i32::MIN;
+            let original_alpha = alpha;
             for move_ in legal_moves {
                 let mut next_board = board.clone();
 
                 next_board.play(move_);
 
-                let (_, score) = self.search(&mut next_board, depth-1, chess::Color::Black, alpha, beta);
+        
+                let (_, score) = self.search(&mut next_board, depth-1, chess::Color::Black, alpha, beta, history, path);
 
                 if score > best_score {
                     best_score = score;
@@ -281,14 +289,24 @@ impl Engine {
                     break;
                 }
             }
+            if !cutoff {
+                // NO CUTOFF (Fail Low or Exact)
+                let flag = if best_score > original_alpha {
+                    TtFlags::EXACT // We improved alpha -> Exact Score
+                } else {
+                    TtFlags::UPPER // We didn't improve alpha -> Upper Bound (Value <= Alpha)
+                };
+                self.transposition_table.store(hash_key, depth, best_score, flag, best_move);
+            }
         } else {
             best_score = i32::MAX;
+            let original_beta = beta;
             for move_ in legal_moves {
                 let mut next_board = board.clone();
 
                 next_board.play(move_);
 
-                let (_, score) = self.search(&mut next_board, depth-1, chess::Color::White, alpha, beta);
+                let (_, score) = self.search(&mut next_board, depth-1, chess::Color::White, alpha, beta, history, path);
 
                 if score < best_score {
                     best_score = score;
@@ -306,7 +324,19 @@ impl Engine {
                     break;
                 }
             }
+
+            if !cutoff {
+                
+                let flag = if best_score < original_beta {
+                    TtFlags::EXACT 
+                } else {
+                    TtFlags::LOWER 
+                };
+                self.transposition_table.store(hash_key, depth, best_score, flag, best_move);
+            }
         }
+
+        path.pop();
 
         if !cutoff {
             self.transposition_table.store(hash_key, depth, best_score, TtFlags::EXACT, best_move);   
@@ -332,17 +362,35 @@ impl Engine {
         return (PIECE_VALUES[victim.unwrap() as usize] * 10) - PIECE_VALUES[board.piece_on(move_.from).unwrap() as usize];
     }
 
-    fn evaluate_board(&mut self, board: &mut chess::Board, depth: i8, color: chess::Color) -> i32 {
-        let (_, score) = self.search(board, depth, color, i32::MIN, i32::MAX);
+    fn is_repetition(&self, history: &Vec<u64>, path: &Vec<u64>, hash_key: u64) -> bool {
+        let mut occurrences = 0;
+        for past_hash in history {
+            if past_hash == &hash_key {
+                occurrences += 1;
+                if occurrences >= 2 { return true; } // Early exit if found
+            }
+        }
+
+        for past_hash in path {
+            if past_hash == &hash_key {
+                occurrences += 1;
+                if occurrences >= 2 { return true; }
+            }
+        }
+        return false;
+    }
+
+    fn evaluate_board(&mut self, board: &mut chess::Board, depth: i8, color: chess::Color, history: &Vec<u64>) -> i32 {
+        let (_, score) = self.search(board, depth, color, i32::MIN, i32::MAX, history, &mut Vec::new());
         return score;
     }
 
-    fn generate_move(&mut self, board: &mut chess::Board, depth: i8, color: chess::Color) -> chess::Move {
-        let (best_move, _) = self.search(board, depth, color, i32::MIN, i32::MAX);
+    fn generate_move(&mut self, board: &mut chess::Board, depth: i8, color: chess::Color, history: &Vec<u64>) -> chess::Move {
+        let (best_move, _) = self.search(board, depth, color, i32::MIN, i32::MAX, history, &mut Vec::new());
         return best_move.unwrap();
     }
 
-    fn evaluate_and_move(&mut self, board: &mut chess::Board, max_depth: i8, color: chess::Color) -> (chess::Move, i32) {
+    fn evaluate_and_move(&mut self, board: &mut chess::Board, max_depth: i8, color: chess::Color, history: &Vec<u64>) -> (chess::Move, i32) {
         let mut best_move: Option<chess::Move> = None;
         let mut score = 0;
         let delta = 25; // Aspiration window size (e.g., 0.25 pawns)
@@ -350,11 +398,12 @@ impl Engine {
         let mut alpha = i32::MIN;
         let mut beta = i32::MAX;
 
+        let mut path : Vec<u64> = Vec::new();
 
         for depth in 1..=max_depth {
             
             loop {
-                (best_move, score) = self.search(board, depth, color, alpha, beta);
+                (best_move, score) = self.search(board, depth, color, alpha, beta, &history, &mut path);
                 
                 if score <= alpha {
                     alpha = i32::MIN;
@@ -372,7 +421,23 @@ impl Engine {
         }
 
         // The result from the final iteration (max_depth)
-        (best_move.unwrap(), score)
+        match best_move {
+            Some(m) => return (m, score),
+            Option::None => {
+                // If we found no move, just grab the first legal move as a fallback
+                // This prevents the crash so you can see what's wrong.
+                let mut legal_moves = Vec::new();
+                board.generate_moves(|moves| { legal_moves.extend(moves); false });
+                
+                if let Some(first_move) = legal_moves.first() {
+                    eprintln!("Warning: Search returned None. Playing fallback move.");
+                    return (*first_move, score);
+                } else {
+                    // No legal moves at all? It's Checkmate/Stalemate.
+                    return (chess::Move{from: chess::Square::A1, to: chess::Square::A1, promotion: None}, score); // Or handle game over
+                }
+            }
+        }
     }
 
 }
@@ -392,30 +457,36 @@ fn main() ->Result<()> {
         let json: Request = serde_json::from_str(buffer.as_str())?;
 
         let command = json.command;
-        let fen: &str = &json.fen;
+        let moves: Vec<String> = json.moves;
         let color: cozy_chess::Color = if json.color == "w" { cozy_chess::Color::White } else { cozy_chess::Color::Black };
         let depth: i8 = json.depth;
+        let mut history: Vec<u64> = Vec::new();
+
+        board = chess::Board::startpos();
+        for mv_str in moves {
+            let parsed_move = chess::util::parse_uci_move(&board, mv_str.as_str()).unwrap();
+            board.play(parsed_move);
+            history.push(board.hash());
+        }
 
         if command == "eval" {
-            board = chess::Board::from_fen(fen, false).unwrap();
-            let score = engine.evaluate_board(&mut board, depth, color);
+
+
+            let score = engine.evaluate_board(&mut board, depth, color, &history);
             println!("Score: {}", score);
             buffer.clear();
             continue;
         }
 
         else if command == "move" {
-            board = chess::Board::from_fen(fen, false).unwrap();
-            let best_move = engine.generate_move(&mut board, depth, color);
+            let best_move = engine.generate_move(&mut board, depth, color, &history);
             println!("Best move: {}", best_move);
             board.play(best_move);
             buffer.clear();
         }
 
         else if command == "eval_move" {
-            board = chess::Board::from_fen(fen, false).unwrap();
-            let _pos_list:Vec<i64> = Vec::new(); // TODO: Make it used
-            let (best_move, score) = engine.evaluate_and_move(&mut board, depth, color);
+            let (best_move, score) = engine.evaluate_and_move(&mut board, depth, color, &history);
             println!("{} {}", chess::util::display_san_move(&board, best_move), score);
             buffer.clear();
         }

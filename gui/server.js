@@ -19,10 +19,10 @@ engineProcess.stderr.on('data', (data) => {
 });
 
 app.post("/move", async (req, res) => {
-  const { fen, color, depth } = req.body;
-  console.log({ fen, color, depth });
+  const { moves, color, depth } = req.body;
+  console.log({ moves, color, depth });
   try {
-    engineProcess.stdin.write(JSON.stringify({command: "eval_move", fen: fen, color: color, depth: depth}) + "\n");
+    engineProcess.stdin.write(JSON.stringify({command: "eval_move", moves: moves, color: color, depth: depth}) + "\n");
 
     res.json(await new Promise((resolve, reject) => {
       engineProcess.stdout.once('data', (data) => {

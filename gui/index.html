@@ -190,7 +190,7 @@
 
             if ($('#player-black').val() === "Computer" && game.turn() === 'b' ||
                 $('#player-white').val() === "Computer" && game.turn() === 'w'){
-                getComputerMove(game.fen(), game.turn(), depth)
+                getComputerMove(game.turn(), depth)
 
             }
         }
@@ -199,7 +199,7 @@
             if (color === "black") {
                 if ($('#player-black').val() === "Computer") {
                     if (game.turn() === 'b') {
-                        getComputerMove(game.fen(), game.turn(), 3)
+                        getComputerMove(game.turn(), depth)
                     }
                 } else {
                     
@@ -207,7 +207,7 @@
             } else {
                 if ($('#player-white').val() === "Computer") {
                     if (game.turn() === 'w') {
-                        getComputerMove(game.fen(), game.turn(), 3)
+                        getComputerMove(game.turn(), depth)
                     }
                 } else {
                     
@@ -215,13 +215,23 @@
             }
         }
 
-        function getComputerMove(fen, color, depth) {
+        function getComputerMove(color, depth) {
+            let moves = game.history({verbose: true}).map(move => {
+                let uci = move.from + move.to;
+                
+                // Add promotion character if it exists (e.g., "q")
+                if (move.promotion) {
+                    uci += move.promotion;
+                }
+                return uci;
+            });
+
             fetch('/move', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
                 },
-                body: JSON.stringify({fen: fen, color: color, depth: depth})
+                body: JSON.stringify({moves: moves, color: color, depth: depth})
             }).then((response) => {
                 return response.json()
             
