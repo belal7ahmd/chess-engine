@@ -100,6 +100,12 @@ pub const PIECE_VALUES: [i32; 6] = [
     900, // QUEEN
     0 // KING
 ];
+
+struct ScoredMove {
+    mv: chess::Move,
+    score: i32
+}
+
 #[derive(Clone, Copy, PartialEq)]
 pub enum TtFlags {
     NONE,
@@ -201,6 +207,40 @@ impl Engine {
         return evaluation;
     }
 
+    fn quiescence_search(&mut self, board: &mut chess::Board, alpha: i32, beta: i32) {
+        let mut capture_moves = Vec::new();
+
+        board.generate_moves(|moves: chess::PieceMoves| {
+            capture_moves.extend(moves.into_iter().filter_map(|mv: chess::Move| {
+                let victim:Option<chess::Color> = board.color_on(mv.to);
+                // 1. Normal Capture (Piece on target square)
+                if victim.is_some() && victim.unwrap() != board.side_to_move() {
+                    return Some(ScoredMove{mv, score: self.order_moves(board, mv, None)});
+                }
+                
+                // 2. En Passant Capture (Target is the EP square)
+                // Note: You might need to check if the moving piece is a pawn, 
+                // but usually only pawns can move to the EP square anyway.
+                if let Some(ep_file) = board.en_passant() {
+                    let ep_rank = match board.side_to_move() {
+                        chess::Color::White => chess::Rank::Sixth, // Rank 6 (0-indexed)
+                        chess::Color::Black => chess::Rank::Third  // Rank 3 (0-indexed)
+                    };
+
+                    if mv.to == chess::Square::new(ep_file, ep_rank) {
+                        return Some(ScoredMove{mv, score: self.order_moves(board, mv, None)});
+                    }
+                }
+
+                None
+            }));
+            false
+        });
+
+        capture_moves.sort_unstable_by(|a, b| b.score.cmp(&a.score));
+    }   
+    
+
     fn search(&mut self, board: &mut chess::Board, depth: i8, color: chess::Color, mut alpha: i32, mut beta: i32, history: &Vec<u64>, path: &mut Vec<u64>) -> (Option<chess::Move>, i32) {
 
         let hash_key = board.hash();
@@ -236,10 +276,13 @@ impl Engine {
             return (None, self.static_evaluate_board(board));
         }
 
-        let mut legal_moves: Vec<chess::Move> = Vec::new();
+        let mut legal_moves: Vec<ScoredMove> = Vec::new();
 
         board.generate_moves(|moves| {
-            legal_moves.extend(moves);
+            legal_moves.extend(moves.into_iter().map(|mv| ScoredMove {
+                mv,
+                score: self.order_moves(board, mv, tt_move.unwrap_or(None))
+            }));
 
            false 
         });
@@ -252,9 +295,7 @@ impl Engine {
             return (None, if board.side_to_move() == chess::Color::White { -checkmate_score } else { checkmate_score });
         }
 
-        legal_moves.sort_by_key(|move_| {
-           return -self.order_moves(board, *move_, tt_move.unwrap_or(None));
-        });
+        legal_moves.sort_unstable_by(|a, b| b.score.cmp(&a.score));
         
         let mut best_move: Option<chess::Move> = None;
         let mut best_score: i32;
@@ -269,14 +310,14 @@ impl Engine {
             for move_ in legal_moves {
                 let mut next_board = board.clone();
 
-                next_board.play(move_);
+                next_board.play(move_.mv);
 
         
                 let (_, score) = self.search(&mut next_board, depth-1, chess::Color::Black, alpha, beta, history, path);
 
                 if score > best_score {
                     best_score = score;
-                    best_move = Some(move_);
+                    best_move = Some(move_.mv);
                 }; 
 
                 if best_score > alpha {
@@ -304,13 +345,13 @@ impl Engine {
             for move_ in legal_moves {
                 let mut next_board = board.clone();
 
-                next_board.play(move_);
+                next_board.play(move_.mv);
 
                 let (_, score) = self.search(&mut next_board, depth-1, chess::Color::White, alpha, beta, history, path);
 
                 if score < best_score {
                     best_score = score;
-                    best_move = Some(move_);
+                    best_move = Some(move_.mv);
                 };
 
                 if best_score < beta {
@@ -344,22 +385,34 @@ impl Engine {
         return (best_move, best_score);
     }
 
-
-
     fn order_moves(&self, board: &chess::Board, move_: chess::Move, tt_move: Option<chess::Move>) -> i32 {
         let victim:Option<chess::Piece> = board.piece_on(move_.to);
 
         if tt_move.is_some(){
             if tt_move.unwrap() == move_ {
-                return 10000;
+                return 1_000_000;
             }
         }
 
         if victim.is_none() {
-            return 0;
+            if let Some(ep_file) = board.en_passant() {
+                // Calculate EP Rank to see if this move hits it
+                let ep_rank = match board.side_to_move() {
+                    chess::Color::White => chess::Rank::Sixth,
+                    chess::Color::Black => chess::Rank::Third,
+                };
+                if move_.to == chess::Square::new(ep_file, ep_rank) {
+                    if board.piece_on(move_.from) == Some(chess::Piece::Pawn) {
+                        return 900; // Correct Score for Pawn takes Pawn (100*10 - 100)
+                    } 
+                }
+            }
+            
+        } else {
+            return (PIECE_VALUES[victim.unwrap() as usize] * 10) - PIECE_VALUES[board.piece_on(move_.from).unwrap() as usize];
         }
 
-        return (PIECE_VALUES[victim.unwrap() as usize] * 10) - PIECE_VALUES[board.piece_on(move_.from).unwrap() as usize];
+        return 0;
     }
 
     fn is_repetition(&self, history: &Vec<u64>, path: &Vec<u64>, hash_key: u64) -> bool {

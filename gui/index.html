@@ -138,11 +138,23 @@
         function onDrop (source, target) {
                 removeGreySquares()
 
-                // see if the move is legal
+                let promotion = 'q' // NOTE: always promote to a queen for example simplicity
+
+                if (game.turn() == 'w' && target[1] == '8' ||
+                    game.turn() == 'b' && target[1] == '1') {
+                
+                    // handle promotion
+                    promotion = prompt("Promote to (q,r,b,n):", "q")
+                    if (promotion === null || !['q','r','b','n'].includes(promotion.toLowerCase())) {
+                        promotion = 'q' // default to queen
+                    } else {
+                        promotion = promotion.toLowerCase()
+                    }
+                }
                 let move = game.move({
                     from: source,
                     to: target,
-                    promotion: 'q' // NOTE: always promote to a queen for example simplicity
+                    promotion: promotion
                 })
 
                 // illegal move
@@ -239,7 +251,10 @@
                 console.log(data)
                 console.log("Best move: " + data.move + " Eval: " + data.evaluation)
                 let move = game.move(data.move)
-                board.move(`${move.from}-${move.to}`)
+                if (!(move === null)) {
+                    board.position(game.fen())
+                }
+                
                 $evalBar.style.height = data.evaluation.parseInt()
             })
         }
