@@ -1,13 +1,15 @@
 const express = require('express');
 const fs = require('fs');
 const { spawn } = require('child_process');
+require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 80;
+const engine_path = process.env.ENGINE_PATH || "../engine/target/release/engine"
 
 app.use(express.json());
 
-let engineProcess = spawn("../engine/target/release/engine.exe");
+let engineProcess = spawn(engine_path);
 
 engineProcess.stdout.on('data', (data) => {
     console.log(`Engine Response: ${data}`);
@@ -20,7 +22,6 @@ engineProcess.stderr.on('data', (data) => {
 
 app.post("/move", async (req, res) => {
   const { moves, color, depth } = req.body;
-  console.log({ moves, color, depth });
   try {
     engineProcess.stdin.write(JSON.stringify({command: "eval_move", moves: moves, color: color, depth: depth}) + "\n");
 
