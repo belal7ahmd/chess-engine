@@ -11,8 +11,39 @@ struct Request{
     depth: i8
 }
 
-pub const PST: [[i32; 64]; 6] = [
-    // PAWN (Rank 1 at bottom, Rank 8 at top)
+pub const MAX_PHASE: i32 = 24; // Total phase value at the start of the game
+
+pub const PHASE_WEIGHTS: [i32; 6] = [
+    0,   // PAWN
+    1,   // KNIGHT
+    1,   // BISHOP
+    2,   // ROOK
+    4,   // QUEEN
+    0    // KING
+];
+
+// From now on MG = Middlegame, EG = Endgame
+
+pub const MG_PIECE_VALUES: [i32; 6] = [
+    100, // PAWN
+    300, // KNIGHT
+    300, // BISHOP
+    500, // ROOK
+    900, // QUEEN
+    0 // KING
+];
+
+pub const EG_PIECE_VALUES: [i32; 6] = [
+    128, // Pawn
+    213, // Knight
+    276, // Bishop
+    441, // Rook
+    825, // Queen
+    0    // King (King has no material value)
+];
+
+pub const MG_PST: [[i32; 64]; 6] = [
+    // 0: PAWN (Control center, don't block king, push for space)
     [
         0,  0,  0,  0,  0,  0,  0,  0,      // Rank 1
         5, 10, 10,-20,-20, 10, 10,  5,      // Rank 2
@@ -23,29 +54,29 @@ pub const PST: [[i32; 64]; 6] = [
         50, 50, 50, 50, 50, 50, 50, 50,     // Rank 7
         0,  0,  0,  0,  0,  0,  0,  0       // Rank 8
     ],
-    // KNIGHT
+    // 1: KNIGHT (Aggressive center control - better than EG version)
     [
         -50,-40,-30,-30,-30,-30,-40,-50,
         -40,-20,  0,  5,  5,  0,-20,-40,
         -30,  5, 10, 15, 15, 10,  5,-30,
-        -30,  0, 15, 20, 20, 15,  0,-30,
-        -30,  5, 15, 20, 20, 15,  5,-30,
-        -30,  0, 10, 15, 15, 10,  0,-30,
+        -30,  5, 20, 30, 30, 20,  5,-30,
+        -30,  5, 20, 30, 30, 20,  5,-30,
+        -30,  5, 10, 15, 15, 10,  5,-30,
         -40,-20,  0,  0,  0,  0,-20,-40,
         -50,-40,-30,-30,-30,-30,-40,-50
     ],
-    // BISHOP
+    // 2: BISHOP (Control long diagonals, avoid corners)
     [
         -20,-10,-10,-10,-10,-10,-10,-20,
         -10,  5,  0,  0,  0,  0,  5,-10,
-        -10, 10, 10, 10, 10, 10, 10,-10,
         -10,  0, 10, 10, 10, 10,  0,-10,
-        -10,  5,  5, 10, 10,  5,  5,-10,
-        -10,  0,  5, 10, 10,  5,  0,-10,
-        -10,  0,  0,  0,  0,  0,  0,-10,
+        -10,  5, 10, 15, 15, 10,  5,-10,
+        -10,  5, 10, 15, 15, 10,  5,-10,
+        -10,  0, 10, 10, 10, 10,  0,-10,
+        -10,  5,  0,  0,  0,  0,  5,-10,
         -20,-10,-10,-10,-10,-10,-10,-20
     ],
-    // ROOK
+    // 3: ROOK (Control open files and 7th rank)
     [
         0,  0,  0,  5,  5,  0,  0,  0,
         -5,  0,  0,  0,  0,  0,  0, -5,
@@ -53,21 +84,21 @@ pub const PST: [[i32; 64]; 6] = [
         -5,  0,  0,  0,  0,  0,  0, -5,
         -5,  0,  0,  0,  0,  0,  0, -5,
         -5,  0,  0,  0,  0,  0,  0, -5,
-        5, 10, 10, 10, 10, 10, 10,  5,
-        0,  0,  0,  0,  0,  0,  0,  0
+        5, 10, 15, 15, 15, 15, 10,  5,
+        0,  0,  0,  5,  5,  0,  0,  0
     ],
-    // QUEEN
+    // 4: QUEEN (Avoid early centralization, stay safe but active)
     [
         -20,-10,-10, -5, -5,-10,-10,-20,
-        -10,  0,  5,  0,  0,  0,  0,-10,
-        -10,  5,  5,  5,  5,  5,  0,-10,
-        0,  0,  5,  5,  5,  5,  0, -5,
+        -10,  0,  0,  0,  0,  0,  0,-10,
+        -10,  0,  5,  5,  5,  5,  0,-10,
+        -5,  0,  5,  5,  5,  5,  0, -5,
         -5,  0,  5,  5,  5,  5,  0, -5,
         -10,  0,  5,  5,  5,  5,  0,-10,
-        -10,  0,  0,  0,  0,  0,  0,-10,
+        -10,  0,  5,  0,  0,  0,  0,-10,
         -20,-10,-10, -5, -5,-10,-10,-20
     ],
-    // KING
+    // 5: KING (Safety first - Keep in the corner for Midgame)
     [
         20, 30, 10,  0,  0, 10, 30, 20,
         20, 20,  0,  0,  0,  0, 20, 20,
@@ -80,25 +111,73 @@ pub const PST: [[i32; 64]; 6] = [
     ]
 ];
 
-// King endgame table (used separately in the evaluation function)
-pub const KING_ENDGAME: [i32; 64] = [
-    -50,-30,-30,-30,-30,-30,-30,-50,
-    -30,-30,  0,  0,  0,  0,-30,-30,
-    -30,-10, 20, 30, 30, 20,-10,-30,
-    -30,-10, 30, 40, 40, 30,-10,-30,
-    -30,-10, 30, 40, 40, 30,-10,-30,
-    -30,-10, 20, 30, 30, 20,-10,-30,
-    -30,-20,-10,  0,  0,-10,-20,-30,
-    -50,-40,-30,-20,-20,-30,-40,-50
-];
-
-pub const PIECE_VALUES: [i32; 6] = [
-    100, // PAWN
-    300, // KNIGHT
-    300, // BISHOP
-    500, // ROOK
-    900, // QUEEN
-    0 // KING
+pub const EG_PST: [[i32; 64]; 6] = [
+    // 0: PAWN (Aggressive push to promotion)
+    [
+        0,  0,  0,  0,  0,  0,  0,  0,      // Rank 1
+        0,  0,  0,  0,  0,  0,  0,  0,      // Rank 2
+        5,  5,  5,  5,  5,  5,  5,  5,      // Rank 3
+        5,  5,  5,  5,  5,  5,  5,  5,      // Rank 4
+        10, 10, 10, 10, 10, 10, 10, 10,     // Rank 5
+        20, 20, 20, 20, 20, 20, 20, 20,     // Rank 6
+        50, 50, 50, 50, 50, 50, 50, 50,     // Rank 7
+        0,  0,  0,  0,  0,  0,  0,  0       // Rank 8
+    ],
+    // 1: KNIGHT (Centralization, avoiding corners)
+    [
+        -50,-40,-30,-30,-30,-30,-40,-50,
+        -40,-20,  0,  5,  5,  0,-20,-40,
+        -30,  5, 10, 15, 15, 10,  5,-30,
+        -30,  0, 15, 20, 20, 15,  0,-30,
+        -30,  5, 15, 20, 20, 15,  5,-30,
+        -30,  0, 10, 15, 15, 10,  0,-30,
+        -40,-20,  0,  0,  0,  0,-20,-40,
+        -50,-40,-30,-30,-30,-30,-40,-50
+    ],
+    // 2: BISHOP (Active diagonals)
+    [
+        -20,-10,-10,-10,-10,-10,-10,-20,
+        -10,  5,  0,  0,  0,  0,  5,-10,
+        -10, 10, 10, 10, 10, 10, 10,-10,
+        -10,  0, 10, 10, 10, 10,  0,-10,
+        -10,  5,  5, 10, 10,  5,  5,-10,
+        -10,  0,  5, 10, 10,  5,  0,-10,
+        -10,  0,  0,  0,  0,  0,  0,-10,
+        -20,-10,-10,-10,-10,-10,-10,-20
+    ],
+    // 3: ROOK (7th rank dominance and mobility)
+    [
+        0,  0,  0,  5,  5,  0,  0,  0,
+        -5,  0,  0,  0,  0,  0,  0, -5,
+        -5,  0,  0,  0,  0,  0,  0, -5,
+        -5,  0,  0,  0,  0,  0,  0, -5,
+        -5,  0,  0,  0,  0,  0,  0, -5,
+        -5,  0,  0,  0,  0,  0,  0, -5,
+        5, 10, 10, 10, 10, 10, 10,  5,
+        0,  0,  0,  0,  0,  0,  0,  0
+    ],
+    // 4: QUEEN (Central pressure)
+    [
+        -20,-10,-10, -5, -5,-10,-10,-20,
+        -10,  0,  5,  0,  0,  0,  0,-10,
+        -10,  5,  5,  5,  5,  5,  0,-10,
+        0,  0,  5,  5,  5,  5,  0, -5,
+        -5,  0,  5,  5,  5,  5,  0, -5,
+        -10,  0,  5,  5,  5,  5,  0,-10,
+        -10,  0,  0,  0,  0,  0,  0,-10,
+        -20,-10,-10, -5, -5,-10,-10,-20
+    ],
+    // 5: KING (The "Active King" logic)
+    [
+        -50,-30,-30,-30,-30,-30,-30,-50,
+        -30,-30,  0,  0,  0,  0,-30,-30,
+        -30,-10, 20, 30, 30, 20,-10,-30,
+        -30,-10, 30, 40, 40, 30,-10,-30,
+        -30,-10, 30, 40, 40, 30,-10,-30,
+        -30,-10, 20, 30, 30, 20,-10,-30,
+        -30,-20,-10,  0,  0,-10,-20,-30,
+        -50,-40,-30,-20,-20,-30,-40,-50
+    ]
 ];
 
 struct ScoredMove {
@@ -189,33 +268,59 @@ impl Engine {
         };
     }
 
+    fn calculate_game_phase(&self, board: &chess::Board) -> i32 {
+        // The chess crate's `pieces` method returns a BitBoard.
+        // .popcnt() counts the number of set bits (pieces) efficiently.
+        
+        let knights = board.pieces(chess::Piece::Knight).len();
+        let bishops = board.pieces(chess::Piece::Bishop).len();
+        let rooks   = board.pieces(chess::Piece::Rook).len();
+        let queens  = board.pieces(chess::Piece::Queen).len();
+
+        // Calculate total phase
+        let phase = (knights * 1) + (bishops * 1) + (rooks * 2) + (queens * 4);
+
+        // We use .min to ensure we never exceed 24 (though standard chess setup is exactly 24)
+        std::cmp::min(phase as i32, MAX_PHASE)
+    }
+    
+
 
     fn static_evaluate_board(&self, board: &chess::Board) -> i32 {
-        let mut evaluation = 0;
+        let mut mg_evaluation = 0;
+        let mut eg_evaluation = 0;
 
         for piece_type in chess::Piece::ALL {
             
             for piece in board.colored_pieces(chess::Color::White, piece_type) { 
-                evaluation += PIECE_VALUES[piece_type as usize];
-                evaluation += PST[piece_type as usize][piece as usize];
+                mg_evaluation += MG_PIECE_VALUES[piece_type as usize];
+                mg_evaluation += MG_PST[piece_type as usize][piece as usize];
+                eg_evaluation += EG_PIECE_VALUES[piece_type as usize];
+                eg_evaluation += EG_PST[piece_type as usize][piece as usize];
             }
             for piece in board.colored_pieces(chess::Color::Black, piece_type) {
-                evaluation -= PIECE_VALUES[piece_type as usize];
-                evaluation -= PST[piece_type as usize][piece.flip_rank() as usize];
+                mg_evaluation -= MG_PIECE_VALUES[piece_type as usize];
+                mg_evaluation -= MG_PST[piece_type as usize][piece.flip_rank() as usize];
+                eg_evaluation -= EG_PIECE_VALUES[piece_type as usize];
+                eg_evaluation -= EG_PST[piece_type as usize][piece.flip_rank() as usize];
             }
         } 
-        return evaluation;
+
+        let phase = self.calculate_game_phase(board);
+
+        return ((mg_evaluation * phase) + (eg_evaluation * (MAX_PHASE - phase))) / MAX_PHASE;
     }
 
-    fn quiescence_search(&mut self, board: &mut chess::Board, alpha: i32, beta: i32) {
+    fn _quiescence_search(&mut self, board: &mut chess::Board, alpha: i32, beta: i32) {
         let mut capture_moves = Vec::new();
+        let phase = self.calculate_game_phase(board);
 
         board.generate_moves(|moves: chess::PieceMoves| {
             capture_moves.extend(moves.into_iter().filter_map(|mv: chess::Move| {
                 let victim:Option<chess::Color> = board.color_on(mv.to);
                 // 1. Normal Capture (Piece on target square)
                 if victim.is_some() && victim.unwrap() != board.side_to_move() {
-                    return Some(ScoredMove{mv, score: self.order_moves(board, mv, None)});
+                    return Some(ScoredMove{mv, score: self.order_moves(board, mv, None, phase)});
                 }
                 
                 // 2. En Passant Capture (Target is the EP square)
@@ -228,7 +333,7 @@ impl Engine {
                     };
 
                     if mv.to == chess::Square::new(ep_file, ep_rank) {
-                        return Some(ScoredMove{mv, score: self.order_moves(board, mv, None)});
+                        return Some(ScoredMove{mv, score: self.order_moves(board, mv, None, phase)});
                     }
                 }
 
@@ -278,10 +383,12 @@ impl Engine {
 
         let mut legal_moves: Vec<ScoredMove> = Vec::new();
 
+        let phase = self.calculate_game_phase(board);
+
         board.generate_moves(|moves| {
             legal_moves.extend(moves.into_iter().map(|mv| ScoredMove {
                 mv,
-                score: self.order_moves(board, mv, tt_move.unwrap_or(None))
+                score: self.order_moves(board, mv, tt_move.unwrap_or(None), phase)
             }));
 
            false 
@@ -379,14 +486,12 @@ impl Engine {
 
         path.pop();
 
-        if !cutoff {
-            self.transposition_table.store(hash_key, depth, best_score, TtFlags::EXACT, best_move);   
-        }
         return (best_move, best_score);
     }
 
-    fn order_moves(&self, board: &chess::Board, move_: chess::Move, tt_move: Option<chess::Move>) -> i32 {
+    fn order_moves(&self, board: &chess::Board, move_: chess::Move, tt_move: Option<chess::Move>, phase: i32) -> i32 {
         let victim:Option<chess::Piece> = board.piece_on(move_.to);
+        let attacker:Option<chess::Piece> = board.piece_on(move_.from);
 
         if tt_move.is_some(){
             if tt_move.unwrap() == move_ {
@@ -402,14 +507,18 @@ impl Engine {
                     chess::Color::Black => chess::Rank::Third,
                 };
                 if move_.to == chess::Square::new(ep_file, ep_rank) {
-                    if board.piece_on(move_.from) == Some(chess::Piece::Pawn) {
+                    if attacker == Some(chess::Piece::Pawn) {
                         return 900; // Correct Score for Pawn takes Pawn (100*10 - 100)
                     } 
                 }
             }
             
         } else {
-            return (PIECE_VALUES[victim.unwrap() as usize] * 10) - PIECE_VALUES[board.piece_on(move_.from).unwrap() as usize];
+
+            let victim_value = ((MG_PIECE_VALUES[victim.unwrap() as usize] * phase) + (EG_PIECE_VALUES[victim.unwrap() as usize] * (MAX_PHASE - phase))) / MAX_PHASE;
+            let attacker_value = ((MG_PIECE_VALUES[attacker.unwrap() as usize] * phase) + (EG_PIECE_VALUES[attacker.unwrap() as usize] * (MAX_PHASE - phase))) / MAX_PHASE;
+
+            return (victim_value * 10) - attacker_value;
         }
 
         return 0;
