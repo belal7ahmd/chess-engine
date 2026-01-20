@@ -308,10 +308,40 @@ impl Engine {
 
         let phase = self.calculate_game_phase(board);
 
-        return ((mg_evaluation * phase) + (eg_evaluation * (MAX_PHASE - phase))) / MAX_PHASE;
+        let result = ((mg_evaluation * phase) + (eg_evaluation * (MAX_PHASE - phase))) / MAX_PHASE;
+
+        return if board.side_to_move() == chess::Color::White { result } else { -result };
     }
 
-    fn _quiescence_search(&mut self, board: &mut chess::Board, alpha: i32, beta: i32) {
+    fn quiescence_search(&mut self, board: &mut chess::Board, mut alpha: i32, beta: i32) -> i32 {
+        let stand_pat = self.static_evaluate_board(board);
+
+        if stand_pat >= beta {
+            return beta; // Beta cutoff
+        }
+
+        let promotion_rank = match board.side_to_move() {
+            chess::Color::White => chess::Rank::Seventh,
+            chess::Color::Black => chess::Rank::Second
+        };
+
+        let pawns_on_promotion_rank = board.colored_pieces(board.side_to_move(), chess::Piece::Pawn)
+            .into_iter()
+            .filter(|&sq| sq.rank() == promotion_rank)
+            .count();
+
+        if pawns_on_promotion_rank == 0 {
+            let delta = 1100; // Max promotion gain (Queen + 2 Pawns)
+            if stand_pat + delta < alpha{
+                return alpha;
+            }
+        }
+
+        if stand_pat > alpha {
+            // Alpha improvement
+            alpha = stand_pat;
+        }
+
         let mut capture_moves = Vec::new();
         let phase = self.calculate_game_phase(board);
 
@@ -343,14 +373,30 @@ impl Engine {
         });
 
         capture_moves.sort_unstable_by(|a, b| b.score.cmp(&a.score));
+
+        for scored_move in capture_moves {
+            let mut next_board = board.clone();
+            next_board.play(scored_move.mv);
+
+            let score = -self.quiescence_search(&mut next_board, -beta, -alpha);
+
+            if score >= beta {
+                return beta; // Beta cutoff
+            }
+
+            if score > alpha {
+                alpha = score; // Alpha improvement
+            }
+        }
+
+        return alpha;
     }   
     
 
     fn search(&mut self, board: &mut chess::Board, depth: i8, color: chess::Color, mut alpha: i32, mut beta: i32, history: &Vec<u64>, path: &mut Vec<u64>) -> (Option<chess::Move>, i32) {
-
         let hash_key = board.hash();
 
-        if self.is_repetition(history, path, hash_key) {
+        if self.is_repetition(history, path, hash_key) && path.len() > 0 {
             return (None, 0);
         }
 
@@ -399,93 +445,62 @@ impl Engine {
                 return (None, 0);
             }
             let checkmate_score = 9999999 + (depth as i32);
-            return (None, if board.side_to_move() == chess::Color::White { -checkmate_score } else { checkmate_score });
+            return (None, -checkmate_score);
         }
 
         legal_moves.sort_unstable_by(|a, b| b.score.cmp(&a.score));
         
         let mut best_move: Option<chess::Move> = None;
-        let mut best_score: i32;
+        let mut best_score: i32 = i32::MIN;
 
         let mut cutoff = false;
 
+        let original_alpha = alpha;
+
         path.push(hash_key);
 
-        if color == chess::Color::White {
-            best_score = i32::MIN;
-            let original_alpha = alpha;
-            for move_ in legal_moves {
-                let mut next_board = board.clone();
+        for scored_move in legal_moves {
+            let mut next_board = board.clone();
+            next_board.play(scored_move.mv);
 
-                next_board.play(move_.mv);
+            let (_, mut score) = self.search(&mut next_board, depth - 1, !color, -beta, -alpha, history, path);
 
-        
-                let (_, score) = self.search(&mut next_board, depth-1, chess::Color::Black, alpha, beta, history, path);
+            score = -score;
 
-                if score > best_score {
-                    best_score = score;
-                    best_move = Some(move_.mv);
-                }; 
-
-                if best_score > alpha {
-                    alpha = best_score;
-                }
-
-                if alpha >= beta {
-                    self.transposition_table.store(board.hash(), depth, score, TtFlags::LOWER, best_move);
-                    cutoff = true;
-                    break;
-                }
-            }
-            if !cutoff {
-                // NO CUTOFF (Fail Low or Exact)
-                let flag = if best_score > original_alpha {
-                    TtFlags::EXACT // We improved alpha -> Exact Score
-                } else {
-                    TtFlags::UPPER // We didn't improve alpha -> Upper Bound (Value <= Alpha)
-                };
-                self.transposition_table.store(hash_key, depth, best_score, flag, best_move);
-            }
-        } else {
-            best_score = i32::MAX;
-            let original_beta = beta;
-            for move_ in legal_moves {
-                let mut next_board = board.clone();
-
-                next_board.play(move_.mv);
-
-                let (_, score) = self.search(&mut next_board, depth-1, chess::Color::White, alpha, beta, history, path);
-
-                if score < best_score {
-                    best_score = score;
-                    best_move = Some(move_.mv);
-                };
-
-                if best_score < beta {
-                    beta = best_score;
-                }
-
-                if alpha >= beta {
-
-                    self.transposition_table.store(board.hash(), depth, score, TtFlags::UPPER, best_move);
-                    cutoff = true;
-                    break;
-                }
+            if score > best_score {
+                best_score = score;
+                best_move = Some(scored_move.mv);
             }
 
-            if !cutoff {
-                
-                let flag = if best_score < original_beta {
-                    TtFlags::EXACT 
-                } else {
-                    TtFlags::LOWER 
-                };
-                self.transposition_table.store(hash_key, depth, best_score, flag, best_move);
+            if score > alpha {
+                alpha = score;
             }
+
+            if alpha >= beta {
+                cutoff = true;
+                self.transposition_table.store(
+                    hash_key,
+                    depth,
+                    best_score,
+                    TtFlags::LOWER,
+                    best_move
+                );
+                break;
+            }
+
         }
 
         path.pop();
 
+        if !cutoff  {
+            self.transposition_table.store(
+                hash_key,
+                depth,
+                best_score,
+                if alpha > original_alpha { TtFlags::EXACT } else { TtFlags::UPPER },
+                best_move
+            );
+        }
         return (best_move, best_score);
     }
 
