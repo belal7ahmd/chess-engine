@@ -258,13 +258,19 @@ impl Default for TtEntry {
 
 struct Engine {
     transposition_table: Tt,
+
+    killer_moves: [[Option<chess::Move>; 2]; 64],
+
+    nodes_searched: u128
 }
 
 impl Engine {
 
     fn new() -> Engine {
         return Engine {
-            transposition_table: Tt::new(1_048_576)
+            transposition_table: Tt::new(1_048_576),
+            killer_moves: [[None; 2]; 64],
+            nodes_searched: 0
         };
     }
 
@@ -350,7 +356,7 @@ impl Engine {
                 let victim:Option<chess::Color> = board.color_on(mv.to);
                 // 1. Normal Capture (Piece on target square)
                 if victim.is_some() && victim.unwrap() != board.side_to_move() {
-                    return Some(ScoredMove{mv, score: self.order_moves(board, mv, None, phase)});
+                    return Some(ScoredMove{mv, score: self.order_moves(board, mv, None, phase, 0)});
                 }
                 
                 // 2. En Passant Capture (Target is the EP square)
@@ -363,7 +369,7 @@ impl Engine {
                     };
 
                     if mv.to == chess::Square::new(ep_file, ep_rank) {
-                        return Some(ScoredMove{mv, score: self.order_moves(board, mv, None, phase)});
+                        return Some(ScoredMove{mv, score: self.order_moves(board, mv, None, phase, 0)});
                     }
                 }
 
@@ -393,11 +399,14 @@ impl Engine {
     }   
     
 
-    fn search(&mut self, board: &mut chess::Board, depth: i8, color: chess::Color, mut alpha: i32, mut beta: i32, history: &Vec<u64>, path: &mut Vec<u64>) -> (Option<chess::Move>, i32) {
+    fn search(&mut self, board: &mut chess::Board, depth: i8, ply: i8, color: chess::Color, mut alpha: i32, mut beta: i32, history: &Vec<u64>, path: &mut Vec<u64>) -> (Option<chess::Move>, i32) {
         let hash_key = board.hash();
 
-        if self.is_repetition(history, path, hash_key) && path.len() > 0 {
-            return (None, 0);
+        self.nodes_searched += 1;
+
+        if self.is_repetition(history, path, hash_key) && ply > 0 {
+            eprintln!("Repetition detected at depth {}!", depth);
+            return (None, -1);
         }
 
         let entry = self.transposition_table.probe(hash_key, depth);
@@ -434,7 +443,7 @@ impl Engine {
         board.generate_moves(|moves| {
             legal_moves.extend(moves.into_iter().map(|mv| ScoredMove {
                 mv,
-                score: self.order_moves(board, mv, tt_move.unwrap_or(None), phase)
+                score: self.order_moves(board, mv, tt_move.unwrap_or(None), phase, ply)
             }));
 
            false 
@@ -463,7 +472,7 @@ impl Engine {
             let mut next_board = board.clone();
             next_board.play(scored_move.mv);
 
-            let (_, mut score) = self.search(&mut next_board, depth - 1, !color, -beta, -alpha, history, path);
+            let (_, mut score) = self.search(&mut next_board, depth - 1, ply + 1, !color, -beta, -alpha, history, path);
 
             score = -score;
 
@@ -485,6 +494,13 @@ impl Engine {
                     TtFlags::LOWER,
                     best_move
                 );
+
+                if board.color_on(scored_move.mv.to).is_none() {
+                    // 2. Shift the existing killer move down to slot 1
+                    self.killer_moves[ply as usize][1] = self.killer_moves[ply as usize][0];
+                    // 3. Save the new "Killer" in slot 0
+                    self.killer_moves[ply as usize][0] = Some(scored_move.mv);
+                }
                 break;
             }
 
@@ -504,7 +520,7 @@ impl Engine {
         return (best_move, best_score);
     }
 
-    fn order_moves(&self, board: &chess::Board, move_: chess::Move, tt_move: Option<chess::Move>, phase: i32) -> i32 {
+    fn order_moves(&self, board: &chess::Board, move_: chess::Move, tt_move: Option<chess::Move>, phase: i32, ply: i8) -> i32 {
         let victim:Option<chess::Piece> = board.piece_on(move_.to);
         let attacker:Option<chess::Piece> = board.piece_on(move_.from);
 
@@ -523,7 +539,7 @@ impl Engine {
                 };
                 if move_.to == chess::Square::new(ep_file, ep_rank) {
                     if attacker == Some(chess::Piece::Pawn) {
-                        return 900; // Correct Score for Pawn takes Pawn (100*10 - 100)
+                        return 100_000 + 900; // Correct Score for Pawn takes Pawn (100*10 - 100)
                     } 
                 }
             }
@@ -533,7 +549,14 @@ impl Engine {
             let victim_value = ((MG_PIECE_VALUES[victim.unwrap() as usize] * phase) + (EG_PIECE_VALUES[victim.unwrap() as usize] * (MAX_PHASE - phase))) / MAX_PHASE;
             let attacker_value = ((MG_PIECE_VALUES[attacker.unwrap() as usize] * phase) + (EG_PIECE_VALUES[attacker.unwrap() as usize] * (MAX_PHASE - phase))) / MAX_PHASE;
 
-            return (victim_value * 10) - attacker_value;
+            return 100_000+ ((victim_value * 10) - attacker_value);
+        }
+
+        if Some(move_) == self.killer_moves[ply as usize][0] {
+            return 90_000;
+        }
+        if Some(move_) == self.killer_moves[ply as usize][1] {
+            return 80_000;
         }
 
         return 0;
@@ -541,6 +564,7 @@ impl Engine {
 
     fn is_repetition(&self, history: &Vec<u64>, path: &Vec<u64>, hash_key: u64) -> bool {
         let mut occurrences = 0;
+
         for past_hash in history {
             if past_hash == &hash_key {
                 occurrences += 1;
@@ -558,12 +582,12 @@ impl Engine {
     }
 
     fn evaluate_board(&mut self, board: &mut chess::Board, depth: i8, color: chess::Color, history: &Vec<u64>) -> i32 {
-        let (_, score) = self.search(board, depth, color, i32::MIN, i32::MAX, history, &mut Vec::new());
+        let (_, score) = self.search(board, depth, 0, color, i32::MIN, i32::MAX, history, &mut Vec::new());
         return score;
     }
 
     fn generate_move(&mut self, board: &mut chess::Board, depth: i8, color: chess::Color, history: &Vec<u64>) -> chess::Move {
-        let (best_move, _) = self.search(board, depth, color, i32::MIN, i32::MAX, history, &mut Vec::new());
+        let (best_move, _) = self.search(board, depth, 0, color, i32::MIN, i32::MAX, history, &mut Vec::new());
         return best_move.unwrap();
     }
 
@@ -577,10 +601,12 @@ impl Engine {
 
         let mut path : Vec<u64> = Vec::new();
 
+        self.killer_moves = [[None; 2]; 64]; // Reset killer moves before search
+
         for depth in 1..=max_depth {
             
             loop {
-                (best_move, score) = self.search(board, depth, color, alpha, beta, &history, &mut path);
+                (best_move, score) = self.search(board, depth, 0, color, alpha, beta, &history, &mut path);
                 
                 if score <= alpha {
                     alpha = i32::MIN;
@@ -596,6 +622,9 @@ impl Engine {
             }
             
         }
+
+        eprintln!("Nodes searched: {}", self.nodes_searched);
+        self.nodes_searched = 0; // Reset for next search
 
         // The result from the final iteration (max_depth)
         match best_move {
@@ -642,8 +671,8 @@ fn main() ->Result<()> {
         board = chess::Board::startpos();
         for mv_str in moves {
             let parsed_move = chess::util::parse_uci_move(&board, mv_str.as_str()).unwrap();
-            board.play(parsed_move);
             history.push(board.hash());
+            board.play(parsed_move);
         }
 
         if command == "eval" {
