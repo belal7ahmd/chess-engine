@@ -18,7 +18,7 @@
         <div style="background-color: black;">
             <span style="background-color: white;" id="eval"></span>
         </div>
-        <div id="myBoard" style="width: 400px"></div>
+        <div id="myBoard" style="width: 100%"></div>
         <div class="selectors">
             <select onchange="onChangeSelector('black')" id="player-black" class="selector">
                 <option value="Player">Player</option>
@@ -50,7 +50,11 @@
     <style>
         #board-container {
             display: flex;
+            flex-direction: column; 
             align-items: center;
+            width: 100%;
+            max-width: 600px; /* Limits size on big screens */
+            margin: 0 auto;
         }
         #eval-bar {
             width: 20px;
@@ -86,6 +90,8 @@
         let $fenEnter = $('#fenEnter')
         let $pgnEnter = $('#pgnEnter')
 
+        let fen_str = ""
+
         let depth = 6
 
         let whiteSquareGrey = '#a9a9a9'
@@ -97,9 +103,12 @@
             if ($fenEnter.val() !== ""){
                 game.load($fenEnter.val())
                 board.position(game.fen())
+                fen_str = $fenEnter.val()
             } else if ($pgnEnter.val() !== "") {
+                console.log("Loading PGN")
                 game.load_pgn($pgnEnter.val())
                 board.position(game.fen())
+                console.log(game.fen())
             }
 
         }
@@ -243,7 +252,7 @@
                 headers: {
                     'Content-Type': 'application/json'
                 },
-                body: JSON.stringify({moves: moves, color: color, depth: depth})
+                body: JSON.stringify({moves: moves, color: color, depth: depth, fen_str: fen_str})
             }).then((response) => {
                 return response.json()
             

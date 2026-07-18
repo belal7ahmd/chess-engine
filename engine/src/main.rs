@@ -7,6 +7,7 @@ use serde::{Deserialize};
 struct Request{
     command: String,
     moves: Vec<String>,
+    fen_str: String,
     color: String,
     depth: i8
 }
@@ -215,14 +216,20 @@ impl Tt {
         }
     }
 
-    fn probe(&self, hash_key: u64, depth: i8) -> Option<&TtEntry> {
+    fn probe(&self, hash_key: u64, depth: i8, return_less:bool) -> Option<&TtEntry> {
         let index = (hash_key & self.mask) as usize;
         let entry = &self.table[index];
 
         // 1. Key Match: Is this the same board position?
         // 2. Depth Check: Is the stored data as deep or deeper than what we need?
-        if entry.key == hash_key && entry.depth >= depth {
-            return Some(entry);
+        if return_less{
+            if entry.key == hash_key {
+                return Some(entry);
+            }
+        } else {
+            if entry.key == hash_key && entry.depth >= depth {
+                return Some(entry);
+            }
         }
         
         None // Miss: Slot is empty, wrong position, or depth too shallow
@@ -240,6 +247,10 @@ impl Tt {
             flag,
             best_move
         };
+    }
+
+    pub fn clear(&mut self) {
+        self.table = vec![TtEntry::default(); self.table.len()].into_boxed_slice();
     }
 }
 
@@ -316,7 +327,7 @@ impl Engine {
 
         let result = ((mg_evaluation * phase) + (eg_evaluation * (MAX_PHASE - phase))) / MAX_PHASE;
 
-        return if board.side_to_move() == chess::Color::White { result } else { -result };
+        if board.side_to_move() == chess::Color::White { result } else { -result }
     }
 
     fn quiescence_search(&mut self, board: &mut chess::Board, mut alpha: i32, beta: i32) -> i32 {
@@ -402,14 +413,12 @@ impl Engine {
     fn search(&mut self, board: &mut chess::Board, depth: i8, ply: i8, color: chess::Color, mut alpha: i32, mut beta: i32, history: &Vec<u64>, path: &mut Vec<u64>) -> (Option<chess::Move>, i32) {
         let hash_key = board.hash();
 
-        self.nodes_searched += 1;
-
-        if self.is_repetition(history, path, hash_key) && ply > 0 {
-            eprintln!("Repetition detected at depth {}!", depth);
+        /*if self.is_repetition(history, path, hash_key) && ply > 0 {
+            //eprintln!("Repetition detected at depth {}!", depth);
             return (None, -1);
-        }
+        }*/
 
-        let entry = self.transposition_table.probe(hash_key, depth);
+        let entry = self.transposition_table.probe(hash_key, depth, false);
         if !entry.is_none() {
             let entry = entry.unwrap();
             if entry.depth >= depth {
@@ -429,7 +438,9 @@ impl Engine {
             }
         }
 
-        let tt_entry = self.transposition_table.probe(hash_key, 0); // Get entry even if depth is low
+        self.nodes_searched += 1;
+
+        let tt_entry = self.transposition_table.probe(hash_key, 0, true); // Get entry even if depth is low
         let tt_move = tt_entry.map(|e| e.best_move);
 
         if depth <= 0 {
@@ -453,7 +464,7 @@ impl Engine {
             if board.checkers().is_empty(){
                 return (None, 0);
             }
-            let checkmate_score = 9999999 + (depth as i32);
+            let checkmate_score = 10000000 - (ply as i32);
             return (None, -checkmate_score);
         }
 
@@ -476,6 +487,10 @@ impl Engine {
 
             score = -score;
 
+            if ply == 0 {
+                //eprintln!("DEBUG: Move {} returned score: {}", scored_move.mv, score);
+            }
+
             if score > best_score {
                 best_score = score;
                 best_move = Some(scored_move.mv);
@@ -487,10 +502,11 @@ impl Engine {
 
             if alpha >= beta {
                 cutoff = true;
+
                 self.transposition_table.store(
                     hash_key,
                     depth,
-                    best_score,
+                    beta,
                     TtFlags::LOWER,
                     best_move
                 );
@@ -501,6 +517,7 @@ impl Engine {
                     // 3. Save the new "Killer" in slot 0
                     self.killer_moves[ply as usize][0] = Some(scored_move.mv);
                 }
+
                 break;
             }
 
@@ -517,6 +534,7 @@ impl Engine {
                 best_move
             );
         }
+        
         return (best_move, best_score);
     }
 
@@ -578,6 +596,7 @@ impl Engine {
                 if occurrences >= 2 { return true; }
             }
         }
+
         return false;
     }
 
@@ -585,7 +604,7 @@ impl Engine {
         let (_, score) = self.search(board, depth, 0, color, i32::MIN, i32::MAX, history, &mut Vec::new());
         return score;
     }
-
+ 
     fn generate_move(&mut self, board: &mut chess::Board, depth: i8, color: chess::Color, history: &Vec<u64>) -> chess::Move {
         let (best_move, _) = self.search(board, depth, 0, color, i32::MIN, i32::MAX, history, &mut Vec::new());
         return best_move.unwrap();
@@ -605,9 +624,10 @@ impl Engine {
 
         for depth in 1..=max_depth {
             
-            loop {
+            // Disabling aspiration for Debugging
+            //loop {
                 (best_move, score) = self.search(board, depth, 0, color, alpha, beta, &history, &mut path);
-                
+                /*
                 if score <= alpha {
                     alpha = i32::MIN;
                     continue;
@@ -618,8 +638,8 @@ impl Engine {
                     alpha = score - delta;
                     beta = score + delta;
                     break;
-                }
-            }
+                }*/
+            //}
             
         }
 
@@ -665,10 +685,15 @@ fn main() ->Result<()> {
         let command = json.command;
         let moves: Vec<String> = json.moves;
         let color: cozy_chess::Color = if json.color == "w" { cozy_chess::Color::White } else { cozy_chess::Color::Black };
+        let fen_str = json.fen_str;
+        let is_fen = fen_str.len() > 0;
         let depth: i8 = json.depth;
         let mut history: Vec<u64> = Vec::new();
 
         board = chess::Board::startpos();
+        if is_fen{
+            board = chess::Board::from_fen(&fen_str, false).unwrap();
+        }
         for mv_str in moves {
             let parsed_move = chess::util::parse_uci_move(&board, mv_str.as_str()).unwrap();
             history.push(board.hash());
@@ -676,7 +701,6 @@ fn main() ->Result<()> {
         }
 
         if command == "eval" {
-
 
             let score = engine.evaluate_board(&mut board, depth, color, &history);
             println!("Score: {}", score);
@@ -694,7 +718,14 @@ fn main() ->Result<()> {
         else if command == "eval_move" {
             let (best_move, score) = engine.evaluate_and_move(&mut board, depth, color, &history);
             println!("{} {}", chess::util::display_san_move(&board, best_move), score);
+
+            history.push(board.hash());
+            board.play(best_move);
+            history.push(board.hash());
+            eprintln!("applied board: {:?}", history);
+
             buffer.clear();
+            engine.transposition_table.clear(); // Clear TT after each eval_move for DEBUGGING purposes
         }
 
     }

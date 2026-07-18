@@ -1,6 +1,6 @@
 const express = require('express');
 const fs = require('fs');
-const { spawn } = require('child_process');
+const { spawn, execFile } = require('child_process');
 require('dotenv').config();
 
 const app = express();
@@ -20,10 +20,22 @@ engineProcess.stderr.on('data', (data) => {
     console.error(`Engine Error: ${data}`);
 });
 
+app.get('/shutdown-engine', (req, res) => {
+  if (req.query.key === '645312') {
+    res.send('Shutting down Mac processes... You can close this tab.');
+    console.log("Shutdown signal received. Closing...");
+    
+    // This tells the Node process to exit after 1 second
+    setTimeout(() => { execFile("/Users/belalahmed/Documents/chessss/stop.command") }, 1000);
+  } else {
+    res.status(403).send('Forbidden');
+  }
+});
+
 app.post("/move", async (req, res) => {
-  const { moves, color, depth } = req.body;
+  const { moves, color, depth, fen_str } = req.body;
   try {
-    engineProcess.stdin.write(JSON.stringify({command: "eval_move", moves: moves, color: color, depth: depth}) + "\n");
+    engineProcess.stdin.write(JSON.stringify({command: "eval_move", moves: moves, color: color, depth: depth, fen_str: fen_str}) + "\n");
 
     res.json(await new Promise((resolve, reject) => {
       engineProcess.stdout.once('data', (data) => {
